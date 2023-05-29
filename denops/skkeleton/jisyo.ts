@@ -14,7 +14,6 @@ import type {
   RankData,
   SkkServerOptions,
 } from "./types.ts";
-import { LazyCell } from "./util.ts";
 
 const okuriAriMarker = ";; okuri-ari entries.";
 const okuriNasiMarker = ";; okuri-nasi entries.";
@@ -33,13 +32,35 @@ function toKifu(n: number): string {
 
 function toZenkaku(n: number): string {
   return n.toString().replaceAll(/[0-9]/g, (c): string => {
-    const zenkakuNumbers = ["０", "１", "２", "３", "４", "５", "６", "７", "８", "９"];
+    const zenkakuNumbers = [
+      "０",
+      "１",
+      "２",
+      "３",
+      "４",
+      "５",
+      "６",
+      "７",
+      "８",
+      "９",
+    ];
     return zenkakuNumbers[parseInt(c)];
   });
 }
 function toKanjiModern(n: number): string {
   return n.toString().replaceAll(/[0-9]/g, (c): string => {
-    const kanjiNumbers = ["〇", "一", "二", "三", "四", "五", "六", "七", "八", "九"];
+    const kanjiNumbers = [
+      "〇",
+      "一",
+      "二",
+      "三",
+      "四",
+      "五",
+      "六",
+      "七",
+      "八",
+      "九",
+    ];
     return kanjiNumbers[parseInt(c)];
   });
 }
@@ -119,6 +140,7 @@ export class NumberConvertWrapper implements Dictionary {
     if (word === realWord) {
       return candidate;
     } else {
+      candidate.unshift(...(await this.#inner.getCandidate(type, word)));
       return candidate.map((c) => convertNumber(c, word));
     }
   }
@@ -129,6 +151,7 @@ export class NumberConvertWrapper implements Dictionary {
     if (prefix === realPrefix) {
       return candidates;
     } else {
+      candidates.unshift(...(await this.#inner.getCandidates(prefix, feed)));
       return candidates.map((
         [kana, cand],
       ) => [kana, cand.map((c) => convertNumber(c, prefix))]);
@@ -146,12 +169,15 @@ export class SKKDictionary implements Dictionary {
   #okuriAri: Map<string, string[]>;
   #okuriNasi: Map<string, string[]>;
 
+  #cachedCandidates: Map<string, CompletionData>;
+
   constructor(
     okuriAri?: Map<string, string[]>,
     okuriNasi?: Map<string, string[]>,
   ) {
     this.#okuriAri = okuriAri ?? new Map();
     this.#okuriNasi = okuriNasi ?? new Map();
+    this.#cachedCandidates = new Map();
   }
 
   getCandidate(type: HenkanType, word: string): Promise<string[]> {
@@ -166,7 +192,7 @@ export class SKKDictionary implements Dictionary {
       for (const [key, kanas] of table) {
         if (key.startsWith(feed) && kanas.length > 1) {
           const feedPrefix = prefix + (kanas as string[])[0];
-          for (const entry of this.#okuriNasi) {
+          for (const entry of this.getCachedCandidates(prefix[0])) {
             if (entry[0].startsWith(feedPrefix)) {
               candidates.push(entry);
             }
@@ -174,14 +200,32 @@ export class SKKDictionary implements Dictionary {
         }
       }
     } else {
-      for (const entry of this.#okuriNasi) {
+      for (const entry of this.getCachedCandidates(prefix[0])) {
         if (entry[0].startsWith(prefix)) {
           candidates.push(entry);
         }
       }
     }
+
     candidates.sort((a, b) => a[0].localeCompare(b[0]));
     return Promise.resolve(candidates);
+  }
+
+  private getCachedCandidates(prefix: string): CompletionData {
+    if (this.#cachedCandidates.has(prefix)) {
+      const candidates = this.#cachedCandidates.get(prefix);
+      return candidates ?? [];
+    }
+
+    const candidates: CompletionData = [];
+    for (const entry of this.#okuriNasi) {
+      if (entry[0].startsWith(prefix)) {
+        candidates.push(entry);
+      }
+    }
+
+    this.#cachedCandidates.set(prefix, candidates);
+    return candidates;
   }
 
   async load(path: string, encoding: string) {
@@ -543,12 +587,20 @@ export class Library {
   }
 
   async getCandidates(prefix: string, feed: string): Promise<CompletionData> {
-    if (prefix.length < 2) {
-      return [];
-    }
     const collector = new Map<string, Set<string>>();
-    for (const dic of this.#dictionaries) {
-      gatherCandidates(collector, await dic.getCandidates(prefix, feed));
+    if (prefix.length == 0) {
+      return [];
+    } else if (prefix.length == 1) {
+      for (const dic of this.#dictionaries) {
+        gatherCandidates(collector, [[
+          prefix,
+          await dic.getCandidate("okurinasi", prefix),
+        ]]);
+      }
+    } else {
+      for (const dic of this.#dictionaries) {
+        gatherCandidates(collector, await dic.getCandidates(prefix, feed));
+      }
     }
     return Array.from(collector.entries())
       .map(([kana, cset]) => [kana, Array.from(cset)]);
@@ -633,5 +685,3 @@ export async function load(
     .concat(skkServer ? [skkServer] : []);
   return new Library(dictionaries, userDictionary);
 }
-
-export const currentLibrary = new LazyCell(() => new Library());
