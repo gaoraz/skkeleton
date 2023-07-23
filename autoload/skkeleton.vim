@@ -167,7 +167,7 @@ function! skkeleton#get_default_mapped_keys() abort "{{{
                 \   '',
                 \   '<C-j>',
                 \   '<C-g>',
-                \   '<Esc>',
+                \   '',
                 \]
 endfunction "}}}
 
